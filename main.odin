@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:math"
 import rl "vendor:raylib"
 
 window_width: i32 = 1280
@@ -21,28 +22,56 @@ main :: proc() {
 	virtual_screen_init(VIRTUAL_WIDTH, VIRTUAL_HEIGHT)
 
 	for !rl.WindowShouldClose() {
-		delta := rl.GetFrameTime()
+		@(static) delta: f32
+		@(static) game_time: f64
+		@(static) turn_player := rl.RED
+		@(static) won := false
+		delta = rl.GetFrameTime()
+		game_time = rl.GetTime()
 
 		mouse_pos := cast([2]i32)[2]f32{virtual_screen_mouse_pos()}
 		left_click := rl.IsMouseButtonPressed(.LEFT)
 
 
 		// game logic
-		@(static) grid: [GAME_GRID_SIZE.x * GAME_GRID_SIZE.y]i32
-		{
+		@(static) grid: [GAME_GRID_SIZE.x * GAME_GRID_SIZE.y]struct {
+			cap:   i32,
+			owner: rl.Color,
+		}
+		@(static) limit: [GAME_GRID_SIZE.x * GAME_GRID_SIZE.y]i32
+		@(static) once := true
+		if once do for cell, i in limit {
+			i := i32(i)
+			if left_i := i + 1; (left_i) / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i < len(grid) {limit[i] += 1}
+			if right_i := i - 1; right_i / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i > 0 {limit[i] += 1}
+			if down_i := i + GAME_GRID_SIZE.x; down_i < len(grid) {limit[i] += 1}
+			if up_i := i - GAME_GRID_SIZE.x; up_i >= 0 {limit[i] += 1}
+		}
+		once = false
 
-
+		if !won {
 			// overflowing
 
 			@(static) react_queue: [dynamic]i32
 			@(static) react_done: int = 0
-			for cell, i in grid {i := i32(i)
 
-				if cell >= 4 {append(&react_queue, i)}
+			red_count, blue_count: int
+			if len(react_queue) == 0 do for cell, i in grid {
+				i := i32(i)
+				if cell.cap >= limit[i] {append(&react_queue, i)}
+				if cell.owner == rl.RED {red_count += 1}
+				if cell.owner == rl.BLUE {blue_count += 1}
+			}
+			if persist_add(0) > 1 {
+				if red_count * blue_count == 0 {
+					if red_count == 0 do turn_player = rl.BLUE
+					if blue_count == 0 do turn_player = rl.RED
+					won = true
+				}
 			}
 
 			for i in react_queue {
-				grid[i] -= 4
+				grid[i].cap -= limit[i]
 				react_done += 1
 
 				// grid spreading pattern:
@@ -50,22 +79,57 @@ main :: proc() {
 				//i-1| i |i+1
 				//   |i+y|
 				{
+					new_reaction := false
 					// if not spreading outside the bounds to the right
-					if (i + 1) / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i < len(grid) {
-						grid[i + 1] += 1
+
+					if left_i := i + 1;
+					   (left_i) / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i < len(grid) {
+						grid[left_i].cap += 1
+						grid[left_i].owner = grid[i].owner
+
+						this_reacted := grid[left_i].cap >= 4
+						if new_reaction {
+							new_reaction = true
+							append(&react_queue, left_i)
+						}
+
 					}
 
-					if (i - 1) / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i > 0 {
-						grid[i - 1] += 1
+					if right_i := (i - 1);
+					   right_i / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i > 0 {
+						grid[right_i].cap += 1
+						grid[right_i].owner = grid[i].owner
+
+						this_reacted := grid[right_i].cap >= 4
+						if new_reaction {
+							new_reaction = true
+							append(&react_queue, right_i)
+						}
 					}
 
-					if (i + GAME_GRID_SIZE.x) < len(grid) {
-						grid[i + GAME_GRID_SIZE.x] += 1
+					if down_i := (i + GAME_GRID_SIZE.x); down_i < len(grid) {
+						grid[down_i].cap += 1
+						grid[down_i].owner = grid[i].owner
+
+						this_reacted := grid[down_i].cap >= 4
+						if new_reaction {
+							new_reaction = true
+							append(&react_queue, down_i)
+						}
 					}
 
-					if (i - GAME_GRID_SIZE.x) >= 0 {
-						grid[i - GAME_GRID_SIZE.x] += 1
+					if up_i := (i - GAME_GRID_SIZE.x); up_i >= 0 {
+						grid[up_i].cap += 1
+						grid[up_i].owner = grid[i].owner
+
+						this_reacted := grid[up_i].cap >= 4
+						if new_reaction {
+							new_reaction = true
+							append(&react_queue, up_i)
+						}
 					}
+
+					if new_reaction {break}
 				}
 			}
 
@@ -75,8 +139,27 @@ main :: proc() {
 			} else if left_click {
 				// clicking
 				grid_pos := (mouse_pos - GAME_BOARD_OFFSET) / CELL_SIZE
-				arr_pos := grid_pos.x + grid_pos.y * GAME_GRID_SIZE.y
-				grid[arr_pos] += 1
+				arr_pos := grid_pos.x + grid_pos.y * GAME_GRID_SIZE.x
+
+				if mouse_pos.x >= GAME_BOARD_OFFSET.x &&
+				   mouse_pos.y >= GAME_BOARD_OFFSET.y &&
+				   mouse_pos.x <= (GAME_BOARD_OFFSET + GAME_BOARD_SIZE).x &&
+				   mouse_pos.y <= (GAME_BOARD_OFFSET + GAME_BOARD_SIZE).y {
+
+					// validate legal click
+					if grid[arr_pos].cap == 0 || grid[arr_pos].owner == turn_player {
+						grid[arr_pos].cap += 1
+						grid[arr_pos].owner = turn_player
+						turn_player = rl.RED if turn_player == rl.BLUE else rl.BLUE
+						turn := persist_add(1)
+					} else {
+						// ilegal click
+						fmt.println("illegal clock")
+					}
+
+				} else {
+					fmt.println("Mouse outside board")
+				}
 			}
 
 		}
@@ -97,7 +180,7 @@ main :: proc() {
 							xoff + CELL_SIZE * x,
 							yoff,
 							xoff + CELL_SIZE * x,
-							yoff + GAME_BOARD_SIZE.x,
+							yoff + GAME_BOARD_SIZE.y,
 							rl.WHITE,
 						)
 
@@ -106,27 +189,69 @@ main :: proc() {
 						rl.DrawLine(
 							xoff,
 							yoff + CELL_SIZE * y,
-							xoff + GAME_BOARD_SIZE.y,
+							xoff + GAME_BOARD_SIZE.x,
 							yoff + CELL_SIZE * y,
 							rl.WHITE,
 						)
 					}
 				}
 
+				// x : time in seconds
+				// period: duration of a full oscilation
+				// shift: offset of the oscilation in seconds
+				// amp: amplitude of a full oscilation
+				oscilate :: #force_inline proc(x, period, shift, amp: f64) -> f64 {
+					return math.sin_f64((x + shift) * 2.0 * math.PI / period) * amp
+				}
+
 				// draw pieces
 				draw_piece :: proc(grid_pos: [2]i32, size: i32, color: rl.Color) {
+					color := color
 					square_pos := grid_pos * CELL_SIZE + GAME_BOARD_OFFSET
-					rl.DrawRectangle(**square_pos, CELL_SIZE, CELL_SIZE, color)
-					rl.DrawText(fmt.caprint(size), **(square_pos + CELL_SIZE / 2), 24, rl.BLACK)
+
+					if size == 3 {
+						color = rl.ColorContrast(color, 1)
+						wobble := oscilate(
+							game_time,
+							0.5,
+							f64(grid_pos.x + grid_pos.y * 2) / 10,
+							2,
+						)
+
+						square_pos.x += cast(i32)wobble
+					}
+					center := cast([2]f32)square_pos + CELL_SIZE / 2
+					layer_height: f32 : CELL_SIZE / 8
+					piece_height := layer_height * f32(size)
+					base_y := center.y + piece_height / 2
+
+
+					for i in 0 ..< size {
+						brightness := (f32(i) - f32(size - 1) / 2) * 0.1
+						layer_color := rl.ColorBrightness(color, brightness)
+
+						draw_cylinder_piece(
+							center.x,
+							base_y - f32(i) * layer_height,
+							CELL_SIZE / 2,
+							CELL_SIZE / 4,
+							layer_height,
+							layer_color,
+						)
+					}
 				}
 
 				for piece, pos in grid {
 					pos := i32(pos)
-					if piece != 0 {
-						piece_pos := [2]i32{pos % GAME_GRID_SIZE.x, pos / GAME_GRID_SIZE.y}
-						draw_piece(piece_pos, piece, rl.RED)
+					if piece.cap != 0 {
+						piece_pos := [2]i32{pos % GAME_GRID_SIZE.x, pos / GAME_GRID_SIZE.x}
+						draw_piece(piece_pos, piece.cap, piece.owner)
 					}
 				}
+
+
+				rl.DrawText("Turn player", 0, 0, 40, turn_player)
+				if won do rl.DrawText("Won", 0, 100, 40, turn_player)
 			}
 
 
