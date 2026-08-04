@@ -31,14 +31,32 @@ main :: proc() {
 
 		mouse_pos := cast([2]i32)[2]f32{virtual_screen_mouse_pos()}
 		left_click := rl.IsMouseButtonPressed(.LEFT)
+		reload := rl.IsKeyPressed(.R)
 
 
-		// game logic
+		// game state
 		@(static) grid: [GAME_GRID_SIZE.x * GAME_GRID_SIZE.y]struct {
 			cap:   i32,
 			owner: rl.Color,
 		}
 		@(static) limit: [GAME_GRID_SIZE.x * GAME_GRID_SIZE.y]i32
+
+		if reload {
+			// reset turn count
+			curr_turn := persist_add(0)
+			persist_add(-curr_turn)
+
+			// reset board
+			grid = {}
+
+			// undo win
+			won = false
+
+			// reset to default first player
+			turn_player = rl.RED
+		}
+
+
 		@(static) once := true
 		if once do for cell, i in limit {
 			i := i32(i)
@@ -49,6 +67,7 @@ main :: proc() {
 		}
 		once = false
 
+		// game logic
 		if !won {
 			// overflowing
 
@@ -87,7 +106,7 @@ main :: proc() {
 						grid[left_i].cap += 1
 						grid[left_i].owner = grid[i].owner
 
-						this_reacted := grid[left_i].cap >= 4
+						this_reacted := grid[left_i].cap >= limit[left_i]
 						if new_reaction {
 							new_reaction = true
 							append(&react_queue, left_i)
@@ -100,7 +119,7 @@ main :: proc() {
 						grid[right_i].cap += 1
 						grid[right_i].owner = grid[i].owner
 
-						this_reacted := grid[right_i].cap >= 4
+						this_reacted := grid[right_i].cap >= limit[right_i]
 						if new_reaction {
 							new_reaction = true
 							append(&react_queue, right_i)
@@ -111,7 +130,7 @@ main :: proc() {
 						grid[down_i].cap += 1
 						grid[down_i].owner = grid[i].owner
 
-						this_reacted := grid[down_i].cap >= 4
+						this_reacted := grid[down_i].cap >= limit[down_i]
 						if new_reaction {
 							new_reaction = true
 							append(&react_queue, down_i)
@@ -122,7 +141,7 @@ main :: proc() {
 						grid[up_i].cap += 1
 						grid[up_i].owner = grid[i].owner
 
-						this_reacted := grid[up_i].cap >= 4
+						this_reacted := grid[up_i].cap >= limit[up_i]
 						if new_reaction {
 							new_reaction = true
 							append(&react_queue, up_i)
@@ -205,11 +224,12 @@ main :: proc() {
 				}
 
 				// draw pieces
-				draw_piece :: proc(grid_pos: [2]i32, size: i32, color: rl.Color) {
+				draw_piece :: proc(pos: i32, size: i32, color: rl.Color) {
+					grid_pos := [2]i32{pos % GAME_GRID_SIZE.x, pos / GAME_GRID_SIZE.x}
 					color := color
 					square_pos := grid_pos * CELL_SIZE + GAME_BOARD_OFFSET
 
-					if size == 3 {
+					if size == limit[pos] - 1 {
 						color = rl.ColorContrast(color, 1)
 						wobble := oscilate(
 							game_time,
@@ -244,8 +264,7 @@ main :: proc() {
 				for piece, pos in grid {
 					pos := i32(pos)
 					if piece.cap != 0 {
-						piece_pos := [2]i32{pos % GAME_GRID_SIZE.x, pos / GAME_GRID_SIZE.x}
-						draw_piece(piece_pos, piece.cap, piece.owner)
+						draw_piece(pos, piece.cap, piece.owner)
 					}
 				}
 
