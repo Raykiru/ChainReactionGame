@@ -31,6 +31,7 @@ main :: proc() {
 
 		mouse_pos := cast([2]i32)[2]f32{virtual_screen_mouse_pos()}
 		left_click := rl.IsMouseButtonPressed(.LEFT)
+		if left_click do fmt.println("clicked")
 		reload := rl.IsKeyPressed(.R)
 
 
@@ -90,6 +91,7 @@ main :: proc() {
 			}
 
 			for i in react_queue {
+				if grid[i].cap < limit[i] {panic("found the bug")}
 				grid[i].cap -= limit[i]
 				react_done += 1
 
