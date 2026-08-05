@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 import "core:math"
+import "core:os"
 import rl "vendor:raylib"
 
 window_width: i32 = 1280
@@ -13,9 +14,10 @@ TS_GRAY :: [4]u8{18, 18, 18, 255}
 
 GRID_ARR_SIZE :: GAME_GRID_SIZE.x * GAME_GRID_SIZE.y
 
-gamestate: struct {
+Gamestate :: struct {
 	delta:       f32,
 	game_time:   f64,
+	turn:        int,
 	turn_player: rl.Color,
 	won:         bool,
 	grid:        [GRID_ARR_SIZE]struct {
@@ -26,6 +28,7 @@ gamestate: struct {
 	react_queue: [dynamic]i32,
 	react_done:  int,
 }
+gamestate: Gamestate
 
 main :: proc() {
 
@@ -58,16 +61,25 @@ main :: proc() {
 
 		mouse_pos := cast([2]i32)[2]f32{virtual_screen_mouse_pos()}
 		left_click := rl.IsMouseButtonPressed(.LEFT)
-		if left_click do fmt.println("clicked")
 		reload := rl.IsKeyPressed(.R)
+		log_state := rl.IsKeyPressed(.L)
 
+		// others
+		if log_state {
+			for cell, i in gamestate.grid {
+				owner_string :=
+					"R" if cell.owner == rl.RED else "B" if cell.owner == rl.BLUE else "_"
+				fmt.print("[", cell.cap, owner_string, "] ")
+				if i32(i) %% GAME_GRID_SIZE.y == GAME_GRID_SIZE.y - 1 {fmt.println()}
+			}
+
+		}
 
 		// game state
 
 		if reload {
 			// reset turn count
-			curr_turn := persist_add(0)
-			persist_add(-curr_turn)
+			gamestate.turn = 0
 
 			// reset board
 			gamestate.grid = {}
@@ -86,22 +98,36 @@ main :: proc() {
 
 
 			red_count, blue_count: int
-			if len(gamestate.react_queue) == 0 do for cell, i in gamestate.grid {
-				i := i32(i)
-				if cell.cap >= gamestate.limit[i] {append(&gamestate.react_queue, i)}
-				if cell.owner == rl.RED {red_count += 1}
-				if cell.owner == rl.BLUE {blue_count += 1}
-			}
-			if persist_add(0) > 1 {
-				if red_count * blue_count == 0 {
-					if red_count == 0 do gamestate.turn_player = rl.BLUE
-					if blue_count == 0 do gamestate.turn_player = rl.RED
-					gamestate.won = true
+			if len(gamestate.react_queue) == 0 {for cell, i in gamestate.grid {
+					i := i32(i)
+					if cell.cap >= gamestate.limit[i] {append(&gamestate.react_queue, i)}
+					if cell.owner == rl.RED {red_count += auto_cast cell.cap}
+					if cell.owner == rl.BLUE {blue_count += auto_cast cell.cap}
+				}
+				if gamestate.turn > 1 {
+					if red_count * blue_count == 0 {
+						fmt.println(red_count, blue_count)
+						if red_count == 0 do gamestate.turn_player = rl.BLUE
+						if blue_count == 0 do gamestate.turn_player = rl.RED
+						gamestate.won = true
+					}
 				}
 			}
 
-			for i in gamestate.react_queue {
-				if gamestate.grid[i].cap < gamestate.limit[i] {panic("found the bug")}
+			// sanity check
+			assert(red_count + blue_count == gamestate.turn)
+
+			reactions: for i, idx in gamestate.react_queue {
+				if gamestate.grid[i].cap < gamestate.limit[i] {
+					fmt.println("idx:", idx, "i:", i, "grid[i]:", gamestate.grid[i])
+					for cell, i in gamestate.grid {
+						owner_string :=
+							"R" if cell.owner == rl.RED else "B" if cell.owner == rl.BLUE else "_"
+						fmt.print("[", cell.cap, owner_string, "] ")
+						if i32(i) %% GAME_GRID_SIZE.y == GAME_GRID_SIZE.y - 1 {fmt.println()}
+					}
+					os.exit(-1)
+				}
 				gamestate.grid[i].cap -= gamestate.limit[i]
 				gamestate.react_done += 1
 
@@ -110,7 +136,6 @@ main :: proc() {
 				//i-1| i |i+1
 				//   |i+y|
 				{
-					new_reaction := false
 					// if not spreading outside the bounds to the right
 
 					if left_i := i + 1;
@@ -118,13 +143,6 @@ main :: proc() {
 					   i < len(gamestate.grid) {
 						gamestate.grid[left_i].cap += 1
 						gamestate.grid[left_i].owner = gamestate.grid[i].owner
-
-						this_reacted := gamestate.grid[left_i].cap >= gamestate.limit[left_i]
-						if new_reaction {
-							new_reaction = true
-							append(&gamestate.react_queue, left_i)
-						}
-
 					}
 
 					if right_i := (i - 1);
@@ -132,38 +150,22 @@ main :: proc() {
 						gamestate.grid[right_i].cap += 1
 						gamestate.grid[right_i].owner = gamestate.grid[i].owner
 
-						this_reacted := gamestate.grid[right_i].cap >= gamestate.limit[right_i]
-						if new_reaction {
-							new_reaction = true
-							append(&gamestate.react_queue, right_i)
-						}
 					}
 
 					if down_i := (i + GAME_GRID_SIZE.x); down_i < len(gamestate.grid) {
 						gamestate.grid[down_i].cap += 1
 						gamestate.grid[down_i].owner = gamestate.grid[i].owner
 
-						this_reacted := gamestate.grid[down_i].cap >= gamestate.limit[down_i]
-						if new_reaction {
-							new_reaction = true
-							append(&gamestate.react_queue, down_i)
-						}
 					}
 
 					if up_i := (i - GAME_GRID_SIZE.x); up_i >= 0 {
 						gamestate.grid[up_i].cap += 1
 						gamestate.grid[up_i].owner = gamestate.grid[i].owner
 
-						this_reacted := gamestate.grid[up_i].cap >= gamestate.limit[up_i]
-						if new_reaction {
-							new_reaction = true
-							append(&gamestate.react_queue, up_i)
-						}
 					}
 
-					if new_reaction {break}
 				}
-			}
+			} // reactions:
 
 			if len(gamestate.react_queue) == gamestate.react_done &&
 			   len(gamestate.react_queue) > 0 {
@@ -186,16 +188,18 @@ main :: proc() {
 						gamestate.grid[arr_pos].owner = gamestate.turn_player
 						gamestate.turn_player =
 							rl.RED if gamestate.turn_player == rl.BLUE else rl.BLUE
-						turn := persist_add(1)
+						gamestate.turn += 1
+						fmt.println(gamestate.turn)
 					} else {
 						// ilegal click
-						fmt.println("illegal clock")
+						fmt.println("illegal click")
 					}
 
 				} else {
 					fmt.println("Mouse outside board")
 				}
 			}
+
 
 		}
 
@@ -231,56 +235,49 @@ main :: proc() {
 					}
 				}
 
-				// x : time in seconds
-				// period: duration of a full oscilation
-				// shift: offset of the oscilation in seconds
-				// amp: amplitude of a full oscilation
-				oscilate :: #force_inline proc(x, period, shift, amp: f64) -> f64 {
-					return math.sin_f64((x + shift) * 2.0 * math.PI / period) * amp
-				}
 
 				// draw pieces
 				draw_piece :: proc(pos: i32, size: i32, color: rl.Color) {
-					grid_pos := [2]i32{pos % GAME_GRID_SIZE.x, pos / GAME_GRID_SIZE.x}
-					color := color
-					square_pos := grid_pos * CELL_SIZE + GAME_BOARD_OFFSET
-
-					if size == gamestate.limit[pos] - 1 {
-						color = rl.ColorContrast(color, 1)
-						wobble := oscilate(
-							gamestate.game_time,
-							0.5,
-							f64(grid_pos.x + grid_pos.y * 2) / 10,
-							2,
-						)
-
-						square_pos.x += cast(i32)wobble
-					}
-					center := cast([2]f32)square_pos + CELL_SIZE / 2
-					layer_height: f32 : CELL_SIZE / 8
-					piece_height := layer_height * f32(size)
-					base_y := center.y + piece_height / 2
-
-
-					for i in 0 ..< size {
-						brightness := (f32(i) - f32(size - 1) / 2) * 0.1
-						layer_color := rl.ColorBrightness(color, brightness)
-
-						draw_cylinder_piece(
-							center.x,
-							base_y - f32(i) * layer_height,
-							CELL_SIZE / 2,
-							CELL_SIZE / 4,
-							layer_height,
-							layer_color,
-						)
-					}
 				}
 
 				for piece, pos in gamestate.grid {
 					pos := i32(pos)
 					if piece.cap != 0 {
-						draw_piece(pos, piece.cap, piece.owner)
+						color := piece.owner
+
+						grid_pos := [2]i32{pos % GAME_GRID_SIZE.x, pos / GAME_GRID_SIZE.x}
+						square_pos := grid_pos * CELL_SIZE + GAME_BOARD_OFFSET
+
+						if piece.cap == gamestate.limit[pos] - 1 {
+							color = rl.ColorContrast(color, 1)
+							wobble := oscilate(
+								gamestate.game_time,
+								0.5,
+								f64(grid_pos.x + grid_pos.y * 2) / 10,
+								2,
+							)
+
+							square_pos.x += cast(i32)wobble
+						}
+						center := cast([2]f32)square_pos + CELL_SIZE / 2
+						layer_height: f32 : CELL_SIZE / 8
+						piece_height := layer_height * f32(piece.cap)
+						base_y := center.y + piece_height / 2
+
+
+						for i in 0 ..< piece.cap {
+							brightness := (f32(i) - f32(piece.cap - 1) / 2) * 0.1
+							layer_color := rl.ColorBrightness(color, brightness)
+
+							draw_cylinder_piece(
+								center.x,
+								base_y - f32(i) * layer_height,
+								CELL_SIZE / 2,
+								CELL_SIZE / 4,
+								layer_height,
+								layer_color,
+							)
+						}
 					}
 				}
 
@@ -306,3 +303,13 @@ GAME_BOARD_OFFSET :: [2]i32 {
 }
 #assert(GAME_BOARD_SIZE.x <= VIRTUAL_WIDTH)
 #assert(GAME_BOARD_SIZE.y <= VIRTUAL_HEIGHT)
+
+// @helper functions
+
+// x : time in seconds
+// period: duration of a full oscilation
+// shift: offset of the oscilation in seconds
+// amp: amplitude of a full oscilation
+oscilate :: #force_inline proc(x, period, shift, amp: f64) -> f64 {
+	return math.sin_f64((x + shift) * 2.0 * math.PI / period) * amp
+}
