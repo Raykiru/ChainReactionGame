@@ -11,6 +11,22 @@ VIRTUAL_WIDTH :: 600
 VIRTUAL_HEIGHT :: 600
 TS_GRAY :: [4]u8{18, 18, 18, 255}
 
+GRID_ARR_SIZE :: GAME_GRID_SIZE.x * GAME_GRID_SIZE.y
+
+gamestate: struct {
+	delta:       f32,
+	game_time:   f64,
+	turn_player: rl.Color,
+	won:         bool,
+	grid:        [GRID_ARR_SIZE]struct {
+		cap:   i32,
+		owner: rl.Color,
+	},
+	limit:       [GRID_ARR_SIZE]i32,
+	react_queue: [dynamic]i32,
+	react_done:  int,
+}
+
 main :: proc() {
 
 	rl.InitWindow(window_width, window_height, "Chain Reaction")
@@ -21,13 +37,24 @@ main :: proc() {
 
 	virtual_screen_init(VIRTUAL_WIDTH, VIRTUAL_HEIGHT)
 
+	// initialisation
+	for cell, i in gamestate.limit {
+		i := i32(i)
+		if left_i := i + 1;
+		   (left_i) / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x &&
+		   i < len(gamestate.grid) {gamestate.limit[i] += 1}
+		if right_i := i - 1;
+		   right_i / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i > 0 {gamestate.limit[i] += 1}
+		if down_i := i + GAME_GRID_SIZE.x; down_i < len(gamestate.grid) {gamestate.limit[i] += 1}
+		if up_i := i - GAME_GRID_SIZE.x; up_i >= 0 {gamestate.limit[i] += 1}
+	}
+	gamestate.turn_player = rl.RED
+	gamestate.won = false
+
+
 	for !rl.WindowShouldClose() {
-		@(static) delta: f32
-		@(static) game_time: f64
-		@(static) turn_player := rl.RED
-		@(static) won := false
-		delta = rl.GetFrameTime()
-		game_time = rl.GetTime()
+		gamestate.delta = rl.GetFrameTime()
+		gamestate.game_time = rl.GetTime()
 
 		mouse_pos := cast([2]i32)[2]f32{virtual_screen_mouse_pos()}
 		left_click := rl.IsMouseButtonPressed(.LEFT)
@@ -36,11 +63,6 @@ main :: proc() {
 
 
 		// game state
-		@(static) grid: [GAME_GRID_SIZE.x * GAME_GRID_SIZE.y]struct {
-			cap:   i32,
-			owner: rl.Color,
-		}
-		@(static) limit: [GAME_GRID_SIZE.x * GAME_GRID_SIZE.y]i32
 
 		if reload {
 			// reset turn count
@@ -48,52 +70,40 @@ main :: proc() {
 			persist_add(-curr_turn)
 
 			// reset board
-			grid = {}
+			gamestate.grid = {}
 
 			// undo win
-			won = false
+			gamestate.won = false
 
 			// reset to default first player
-			turn_player = rl.RED
+			gamestate.turn_player = rl.RED
 		}
 
-
-		@(static) once := true
-		if once do for cell, i in limit {
-			i := i32(i)
-			if left_i := i + 1; (left_i) / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i < len(grid) {limit[i] += 1}
-			if right_i := i - 1; right_i / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i > 0 {limit[i] += 1}
-			if down_i := i + GAME_GRID_SIZE.x; down_i < len(grid) {limit[i] += 1}
-			if up_i := i - GAME_GRID_SIZE.x; up_i >= 0 {limit[i] += 1}
-		}
-		once = false
 
 		// game logic
-		if !won {
+		if !gamestate.won {
 			// overflowing
 
-			@(static) react_queue: [dynamic]i32
-			@(static) react_done: int = 0
 
 			red_count, blue_count: int
-			if len(react_queue) == 0 do for cell, i in grid {
+			if len(gamestate.react_queue) == 0 do for cell, i in gamestate.grid {
 				i := i32(i)
-				if cell.cap >= limit[i] {append(&react_queue, i)}
+				if cell.cap >= gamestate.limit[i] {append(&gamestate.react_queue, i)}
 				if cell.owner == rl.RED {red_count += 1}
 				if cell.owner == rl.BLUE {blue_count += 1}
 			}
 			if persist_add(0) > 1 {
 				if red_count * blue_count == 0 {
-					if red_count == 0 do turn_player = rl.BLUE
-					if blue_count == 0 do turn_player = rl.RED
-					won = true
+					if red_count == 0 do gamestate.turn_player = rl.BLUE
+					if blue_count == 0 do gamestate.turn_player = rl.RED
+					gamestate.won = true
 				}
 			}
 
-			for i in react_queue {
-				if grid[i].cap < limit[i] {panic("found the bug")}
-				grid[i].cap -= limit[i]
-				react_done += 1
+			for i in gamestate.react_queue {
+				if gamestate.grid[i].cap < gamestate.limit[i] {panic("found the bug")}
+				gamestate.grid[i].cap -= gamestate.limit[i]
+				gamestate.react_done += 1
 
 				// grid spreading pattern:
 				//   |i-y|
@@ -104,49 +114,50 @@ main :: proc() {
 					// if not spreading outside the bounds to the right
 
 					if left_i := i + 1;
-					   (left_i) / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i < len(grid) {
-						grid[left_i].cap += 1
-						grid[left_i].owner = grid[i].owner
+					   (left_i) / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x &&
+					   i < len(gamestate.grid) {
+						gamestate.grid[left_i].cap += 1
+						gamestate.grid[left_i].owner = gamestate.grid[i].owner
 
-						this_reacted := grid[left_i].cap >= limit[left_i]
+						this_reacted := gamestate.grid[left_i].cap >= gamestate.limit[left_i]
 						if new_reaction {
 							new_reaction = true
-							append(&react_queue, left_i)
+							append(&gamestate.react_queue, left_i)
 						}
 
 					}
 
 					if right_i := (i - 1);
 					   right_i / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i > 0 {
-						grid[right_i].cap += 1
-						grid[right_i].owner = grid[i].owner
+						gamestate.grid[right_i].cap += 1
+						gamestate.grid[right_i].owner = gamestate.grid[i].owner
 
-						this_reacted := grid[right_i].cap >= limit[right_i]
+						this_reacted := gamestate.grid[right_i].cap >= gamestate.limit[right_i]
 						if new_reaction {
 							new_reaction = true
-							append(&react_queue, right_i)
+							append(&gamestate.react_queue, right_i)
 						}
 					}
 
-					if down_i := (i + GAME_GRID_SIZE.x); down_i < len(grid) {
-						grid[down_i].cap += 1
-						grid[down_i].owner = grid[i].owner
+					if down_i := (i + GAME_GRID_SIZE.x); down_i < len(gamestate.grid) {
+						gamestate.grid[down_i].cap += 1
+						gamestate.grid[down_i].owner = gamestate.grid[i].owner
 
-						this_reacted := grid[down_i].cap >= limit[down_i]
+						this_reacted := gamestate.grid[down_i].cap >= gamestate.limit[down_i]
 						if new_reaction {
 							new_reaction = true
-							append(&react_queue, down_i)
+							append(&gamestate.react_queue, down_i)
 						}
 					}
 
 					if up_i := (i - GAME_GRID_SIZE.x); up_i >= 0 {
-						grid[up_i].cap += 1
-						grid[up_i].owner = grid[i].owner
+						gamestate.grid[up_i].cap += 1
+						gamestate.grid[up_i].owner = gamestate.grid[i].owner
 
-						this_reacted := grid[up_i].cap >= limit[up_i]
+						this_reacted := gamestate.grid[up_i].cap >= gamestate.limit[up_i]
 						if new_reaction {
 							new_reaction = true
-							append(&react_queue, up_i)
+							append(&gamestate.react_queue, up_i)
 						}
 					}
 
@@ -154,9 +165,10 @@ main :: proc() {
 				}
 			}
 
-			if len(react_queue) == react_done && len(react_queue) > 0 {
-				clear(&react_queue)
-				react_done = 0
+			if len(gamestate.react_queue) == gamestate.react_done &&
+			   len(gamestate.react_queue) > 0 {
+				clear(&gamestate.react_queue)
+				gamestate.react_done = 0
 			} else if left_click {
 				// clicking
 				grid_pos := (mouse_pos - GAME_BOARD_OFFSET) / CELL_SIZE
@@ -168,10 +180,12 @@ main :: proc() {
 				   mouse_pos.y <= (GAME_BOARD_OFFSET + GAME_BOARD_SIZE).y {
 
 					// validate legal click
-					if grid[arr_pos].cap == 0 || grid[arr_pos].owner == turn_player {
-						grid[arr_pos].cap += 1
-						grid[arr_pos].owner = turn_player
-						turn_player = rl.RED if turn_player == rl.BLUE else rl.BLUE
+					if gamestate.grid[arr_pos].cap == 0 ||
+					   gamestate.grid[arr_pos].owner == gamestate.turn_player {
+						gamestate.grid[arr_pos].cap += 1
+						gamestate.grid[arr_pos].owner = gamestate.turn_player
+						gamestate.turn_player =
+							rl.RED if gamestate.turn_player == rl.BLUE else rl.BLUE
 						turn := persist_add(1)
 					} else {
 						// ilegal click
@@ -231,10 +245,10 @@ main :: proc() {
 					color := color
 					square_pos := grid_pos * CELL_SIZE + GAME_BOARD_OFFSET
 
-					if size == limit[pos] - 1 {
+					if size == gamestate.limit[pos] - 1 {
 						color = rl.ColorContrast(color, 1)
 						wobble := oscilate(
-							game_time,
+							gamestate.game_time,
 							0.5,
 							f64(grid_pos.x + grid_pos.y * 2) / 10,
 							2,
@@ -263,7 +277,7 @@ main :: proc() {
 					}
 				}
 
-				for piece, pos in grid {
+				for piece, pos in gamestate.grid {
 					pos := i32(pos)
 					if piece.cap != 0 {
 						draw_piece(pos, piece.cap, piece.owner)
@@ -271,8 +285,8 @@ main :: proc() {
 				}
 
 
-				rl.DrawText("Turn player", 0, 0, 40, turn_player)
-				if won do rl.DrawText("Won", 0, 100, 40, turn_player)
+				rl.DrawText("Turn player", 0, 0, 40, gamestate.turn_player)
+				if gamestate.won do rl.DrawText("Won", 0, 100, 40, gamestate.turn_player)
 			}
 
 
