@@ -8,6 +8,8 @@ import rl "vendor:raylib"
 window_width: i32 = 1280
 window_height: i32 = 720
 
+TESTING :: true
+
 VIRTUAL_WIDTH :: 600
 VIRTUAL_HEIGHT :: 600
 TS_GRAY :: [4]u8{18, 18, 18, 255}
@@ -15,18 +17,25 @@ TS_GRAY :: [4]u8{18, 18, 18, 255}
 GRID_ARR_SIZE :: GAME_GRID_SIZE.x * GAME_GRID_SIZE.y
 
 Gamestate :: struct {
-	delta:       f32,
-	game_time:   f64,
-	turn:        int,
-	turn_player: rl.Color,
-	won:         bool,
-	grid:        [GRID_ARR_SIZE]struct {
+	delta:             f32,
+	game_time:         f64,
+	turn:              int,
+	turn_player:       rl.Color,
+	won:               bool,
+	grid:              [GRID_ARR_SIZE]struct {
 		cap:   i32,
 		owner: rl.Color,
 	},
-	limit:       [GRID_ARR_SIZE]i32,
-	react_queue: [dynamic]i32,
-	react_done:  int,
+	limit:             [GRID_ARR_SIZE]i32,
+	react_queue:       [dynamic]i32,
+	react_done:        int,
+	running_animation: struct {
+		onwer:         rl.Color,
+		current:       f64, // current value
+		target:        f64, // target value
+		start_cell_id: i32,
+		end_cell_id:   i32, // the cells it moves from to
+	},
 }
 gamestate: Gamestate
 
@@ -93,10 +102,8 @@ main :: proc() {
 
 
 		// game logic
-		if !gamestate.won {
+		if !gamestate.won || TESTING { 	// when testing ignore win rules
 			// overflowing
-
-
 			red_count, blue_count: int
 			if len(gamestate.react_queue) == 0 {for cell, i in gamestate.grid {
 					i := i32(i)
@@ -106,7 +113,6 @@ main :: proc() {
 				}
 				if gamestate.turn > 1 {
 					if red_count * blue_count == 0 {
-						fmt.println(red_count, blue_count)
 						if red_count == 0 do gamestate.turn_player = rl.BLUE
 						if blue_count == 0 do gamestate.turn_player = rl.RED
 						gamestate.won = true
@@ -119,13 +125,7 @@ main :: proc() {
 
 			reactions: for i, idx in gamestate.react_queue {
 				if gamestate.grid[i].cap < gamestate.limit[i] {
-					fmt.println("idx:", idx, "i:", i, "grid[i]:", gamestate.grid[i])
-					for cell, i in gamestate.grid {
-						owner_string :=
-							"R" if cell.owner == rl.RED else "B" if cell.owner == rl.BLUE else "_"
-						fmt.print("[", cell.cap, owner_string, "] ")
-						if i32(i) %% GAME_GRID_SIZE.y == GAME_GRID_SIZE.y - 1 {fmt.println()}
-					}
+					fmt.eprint("found bug again")
 					os.exit(-1)
 				}
 				gamestate.grid[i].cap -= gamestate.limit[i]
@@ -167,40 +167,54 @@ main :: proc() {
 				}
 			} // reactions:
 
-			if len(gamestate.react_queue) == gamestate.react_done &&
-			   len(gamestate.react_queue) > 0 {
+			has_reactions := len(gamestate.react_queue) == gamestate.react_done
+
+			if has_reactions && len(gamestate.react_queue) > 0 {
 				clear(&gamestate.react_queue)
 				gamestate.react_done = 0
-			} else if left_click {
-				// clicking
-				grid_pos := (mouse_pos - GAME_BOARD_OFFSET) / CELL_SIZE
-				arr_pos := grid_pos.x + grid_pos.y * GAME_GRID_SIZE.x
+			}
 
-				if mouse_pos.x >= GAME_BOARD_OFFSET.x &&
-				   mouse_pos.y >= GAME_BOARD_OFFSET.y &&
-				   mouse_pos.x <= (GAME_BOARD_OFFSET + GAME_BOARD_SIZE).x &&
-				   mouse_pos.y <= (GAME_BOARD_OFFSET + GAME_BOARD_SIZE).y {
+			// reacting to player input
+			if len(gamestate.react_queue) == 0 {
+				if left_click {
+					// clicking
+					grid_pos := (mouse_pos - GAME_BOARD_OFFSET) / CELL_SIZE
+					arr_pos := grid_pos.x + grid_pos.y * GAME_GRID_SIZE.x
 
-					// validate legal click
-					if gamestate.grid[arr_pos].cap == 0 ||
-					   gamestate.grid[arr_pos].owner == gamestate.turn_player {
-						gamestate.grid[arr_pos].cap += 1
-						gamestate.grid[arr_pos].owner = gamestate.turn_player
-						gamestate.turn_player =
-							rl.RED if gamestate.turn_player == rl.BLUE else rl.BLUE
-						gamestate.turn += 1
-						fmt.println(gamestate.turn)
+					if mouse_pos.x >= GAME_BOARD_OFFSET.x &&
+					   mouse_pos.y >= GAME_BOARD_OFFSET.y &&
+					   mouse_pos.x <= (GAME_BOARD_OFFSET + GAME_BOARD_SIZE).x &&
+					   mouse_pos.y <= (GAME_BOARD_OFFSET + GAME_BOARD_SIZE).y {
+
+						// validate legal click
+						if gamestate.grid[arr_pos].cap == 0 ||
+						   gamestate.grid[arr_pos].owner == gamestate.turn_player {
+							gamestate.grid[arr_pos].cap += 1
+							gamestate.grid[arr_pos].owner = gamestate.turn_player
+
+							// toggle switching player turn
+							when !TESTING do gamestate.turn_player =
+								rl.RED if gamestate.turn_player == rl.BLUE else rl.BLUE
+							gamestate.turn += 1
+
+							fmt.println("clicked ", arr_pos)
+						} else {
+							// ilegal click
+							fmt.println("illegal click")
+						}
+
 					} else {
-						// ilegal click
-						fmt.println("illegal click")
+						fmt.println("Mouse outside board")
 					}
-
-				} else {
-					fmt.println("Mouse outside board")
 				}
 			}
 
 
+		}
+
+		// progressing animation
+		{
+			todo()
 		}
 
 		// virtual drawing
