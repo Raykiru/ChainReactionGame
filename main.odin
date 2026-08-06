@@ -2,13 +2,14 @@ package main
 
 import "core:fmt"
 import "core:math"
+import "core:math/linalg"
 import "core:os"
 import rl "vendor:raylib"
 
 window_width: i32 = 1280
 window_height: i32 = 720
 
-TESTING :: true
+TESTING :: false
 
 VIRTUAL_WIDTH :: 600
 VIRTUAL_HEIGHT :: 600
@@ -16,26 +17,26 @@ TS_GRAY :: [4]u8{18, 18, 18, 255}
 
 GRID_ARR_SIZE :: GAME_GRID_SIZE.x * GAME_GRID_SIZE.y
 
+Anim :: struct {
+	owner:         rl.Color,
+	progress:      f64, // current value, 0 means started, 1 means finished animation
+	start_cell_id: i32,
+	end_cell_id:   i32, // the cells it moves from to
+}
 Gamestate :: struct {
-	delta:             f32,
-	game_time:         f64,
-	turn:              int,
-	turn_player:       rl.Color,
-	won:               bool,
-	grid:              [GRID_ARR_SIZE]struct {
+	delta:              f32,
+	game_time:          f64,
+	turn:               int,
+	turn_player:        rl.Color,
+	won:                bool,
+	grid:               [GRID_ARR_SIZE]struct {
 		cap:   i32,
 		owner: rl.Color,
 	},
-	limit:             [GRID_ARR_SIZE]i32,
-	react_queue:       [dynamic]i32,
-	react_done:        int,
-	running_animation: struct {
-		onwer:         rl.Color,
-		current:       f64, // current value
-		target:        f64, // target value
-		start_cell_id: i32,
-		end_cell_id:   i32, // the cells it moves from to
-	},
+	limit:              [GRID_ARR_SIZE]i32,
+	react_queue:        [dynamic]i32,
+	react_done:         int,
+	running_animations: [dynamic]Anim,
 }
 gamestate: Gamestate
 
@@ -52,13 +53,13 @@ main :: proc() {
 	// initialisation
 	for cell, i in gamestate.limit {
 		i := i32(i)
-		if left_i := i + 1;
-		   (left_i) / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x &&
-		   i < len(gamestate.grid) {gamestate.limit[i] += 1}
-		if right_i := i - 1;
-		   right_i / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i > 0 {gamestate.limit[i] += 1}
-		if down_i := i + GAME_GRID_SIZE.x; down_i < len(gamestate.grid) {gamestate.limit[i] += 1}
-		if up_i := i - GAME_GRID_SIZE.x; up_i >= 0 {gamestate.limit[i] += 1}
+
+		if (i + 1) / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i < len(gamestate.grid) {
+			gamestate.limit[i] += 1
+		}
+		if (i - 1) / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i > 0 {gamestate.limit[i] += 1}
+		if (i + GAME_GRID_SIZE.x) < len(gamestate.grid) {gamestate.limit[i] += 1}
+		if (i - GAME_GRID_SIZE.x) >= 0 {gamestate.limit[i] += 1}
 	}
 	gamestate.turn_player = rl.RED
 	gamestate.won = false
@@ -100,17 +101,27 @@ main :: proc() {
 			gamestate.turn_player = rl.RED
 		}
 
-
 		// game logic
 		if !gamestate.won || TESTING { 	// when testing ignore win rules
 			// overflowing
 			red_count, blue_count: int
-			if len(gamestate.react_queue) == 0 {for cell, i in gamestate.grid {
+			if len(gamestate.react_queue) == 0 {
+				for cell, i in gamestate.grid {
 					i := i32(i)
 					if cell.cap >= gamestate.limit[i] {append(&gamestate.react_queue, i)}
-					if cell.owner == rl.RED {red_count += auto_cast cell.cap}
+					if cell.owner == rl.RED {
+						red_count += auto_cast cell.cap
+					}
 					if cell.owner == rl.BLUE {blue_count += auto_cast cell.cap}
 				}
+
+				for cell, i in gamestate.running_animations {
+					if cell.owner == rl.RED {
+						red_count += 1
+					}
+					if cell.owner == rl.BLUE {blue_count += 1}
+				}
+
 				if gamestate.turn > 1 {
 					if red_count * blue_count == 0 {
 						if red_count == 0 do gamestate.turn_player = rl.BLUE
@@ -121,7 +132,14 @@ main :: proc() {
 			}
 
 			// sanity check
-			assert(red_count + blue_count == gamestate.turn)
+			when true {
+				fmt.assertf(
+					red_count + blue_count == gamestate.turn,
+					"%v != %v",
+					red_count + blue_count,
+					gamestate.turn,
+				)
+			}
 
 			reactions: for i, idx in gamestate.react_queue {
 				if gamestate.grid[i].cap < gamestate.limit[i] {
@@ -130,6 +148,7 @@ main :: proc() {
 				}
 				gamestate.grid[i].cap -= gamestate.limit[i]
 				gamestate.react_done += 1
+				orig := gamestate.grid[i]
 
 				// grid spreading pattern:
 				//   |i-y|
@@ -141,26 +160,62 @@ main :: proc() {
 					if left_i := i + 1;
 					   (left_i) / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x &&
 					   i < len(gamestate.grid) {
-						gamestate.grid[left_i].cap += 1
-						gamestate.grid[left_i].owner = gamestate.grid[i].owner
+						// gamestate.grid[left_i].cap += 1
+						// gamestate.grid[left_i].owner = gamestate.grid[i].owner
+						append_elem(
+							&gamestate.running_animations,
+							Anim {
+								owner = orig.owner,
+								progress = 0.5,
+								start_cell_id = i,
+								end_cell_id = left_i,
+							},
+						)
 					}
 
 					if right_i := (i - 1);
 					   right_i / GAME_GRID_SIZE.x == (i) / GAME_GRID_SIZE.x && i > 0 {
-						gamestate.grid[right_i].cap += 1
-						gamestate.grid[right_i].owner = gamestate.grid[i].owner
+						// gamestate.grid[right_i].cap += 1
+						// gamestate.grid[right_i].owner = gamestate.grid[i].owner
+						append_elem(
+							&gamestate.running_animations,
+							Anim {
+								owner = orig.owner,
+								progress = 0.5,
+								start_cell_id = i,
+								end_cell_id = right_i,
+							},
+						)
 
 					}
 
 					if down_i := (i + GAME_GRID_SIZE.x); down_i < len(gamestate.grid) {
-						gamestate.grid[down_i].cap += 1
-						gamestate.grid[down_i].owner = gamestate.grid[i].owner
+						// gamestate.grid[down_i].cap += 1
+						// gamestate.grid[down_i].owner = gamestate.grid[i].owner
+						append_elem(
+							&gamestate.running_animations,
+							Anim {
+								owner = orig.owner,
+								progress = 0.5,
+								start_cell_id = i,
+								end_cell_id = down_i,
+							},
+						)
 
 					}
 
 					if up_i := (i - GAME_GRID_SIZE.x); up_i >= 0 {
-						gamestate.grid[up_i].cap += 1
-						gamestate.grid[up_i].owner = gamestate.grid[i].owner
+						// gamestate.grid[up_i].cap += 1
+						// gamestate.grid[up_i].owner = gamestate.grid[i].owner
+						append_elem(
+							&gamestate.running_animations,
+							Anim {
+								owner = orig.owner,
+								progress = 0.5,
+								start_cell_id = i,
+								end_cell_id = up_i,
+							},
+						)
 
 					}
 
@@ -214,7 +269,27 @@ main :: proc() {
 
 		// progressing animation
 		{
-			todo()
+
+			for i := 0; i < len(gamestate.running_animations);  /**/{
+				piece := &gamestate.running_animations[i]
+
+				// animation finished, remove it
+				if piece.progress >= 1 {
+					// place it on the board
+					gamestate.grid[piece.end_cell_id].cap += 1
+					gamestate.grid[piece.end_cell_id].owner = piece.owner
+
+
+					unordered_remove(&gamestate.running_animations, i)
+					continue
+				}
+
+
+				piece.progress += f64(gamestate.delta) * 10
+				piece.progress = min(piece.progress, 1)
+				i += 1
+			}
+
 		}
 
 		// virtual drawing
@@ -251,9 +326,6 @@ main :: proc() {
 
 
 				// draw pieces
-				draw_piece :: proc(pos: i32, size: i32, color: rl.Color) {
-				}
-
 				for piece, pos in gamestate.grid {
 					pos := i32(pos)
 					if piece.cap != 0 {
@@ -296,6 +368,46 @@ main :: proc() {
 				}
 
 
+				for piece in gamestate.running_animations {
+					color := piece.owner
+					piece_height := f32(CELL_SIZE) / 8.0
+
+					// position in the array of the grid
+					pos_end := piece.end_cell_id
+					// position in the matrix of the grid
+					grid_pos_end := [2]i32{pos_end % GAME_GRID_SIZE.x, pos_end / GAME_GRID_SIZE.x}
+					// position on the screen
+					square_pos_end := grid_pos_end * CELL_SIZE + GAME_BOARD_OFFSET
+					// position shifted to the center of the square
+					center_end := cast([2]f32)square_pos_end + CELL_SIZE / 2
+
+					// position in the array of the grid
+					pos_start := piece.start_cell_id
+					// position in the matrix of the grid
+					grid_pos_start := [2]i32 {
+						pos_start % GAME_GRID_SIZE.x,
+						pos_start / GAME_GRID_SIZE.x,
+					}
+					// position on the screen
+					square_pos_start := grid_pos_start * CELL_SIZE + GAME_BOARD_OFFSET
+					// position shifted to the center of the square
+					center_start := cast([2]f32)square_pos_start + CELL_SIZE / 2
+
+					center := math.lerp(center_start, center_end, f32(piece.progress))
+
+					base_y := center.y - piece_height / 2
+
+
+					draw_cylinder_piece(
+						center.x,
+						base_y,
+						CELL_SIZE / 2,
+						CELL_SIZE / 4,
+						piece_height,
+						color,
+					)
+				}
+
 				rl.DrawText("Turn player", 0, 0, 40, gamestate.turn_player)
 				if gamestate.won do rl.DrawText("Won", 0, 100, 40, gamestate.turn_player)
 			}
@@ -306,6 +418,9 @@ main :: proc() {
 
 		virtual_screen_render()
 	}
+
+
+	fmt.println(gamestate.turn)
 }
 
 GAME_GRID_SIZE :: [2]i32{5, 5}
